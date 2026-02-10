@@ -1,0 +1,45 @@
+#include <Arduino_LSM6DS3.h>
+
+float x, y, z;
+int minThresh = 30;  // Movement slower than 30 is ignored
+int maxThresh = 500; // Movement at this speed (or faster) is 100%
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial);
+  if (!IMU.begin()) {
+    while (1);
+  }
+}
+
+void loop() {
+  if (IMU.gyroscopeAvailable()) {
+    IMU.readGyroscope(x, y, z);
+  }
+
+  // FRONT (Positive Y)
+  if (y > minThresh) {
+    int val = map(constrain(y, minThresh, maxThresh), minThresh, maxThresh, 1, 100);
+    Serial.print("Front Intensity: "); Serial.println(val);
+  }
+  
+  // BACK (Negative Y)
+  else if (y < -minThresh) {
+    int val = map(constrain(abs(y), minThresh, maxThresh), minThresh, maxThresh, 1, 100);
+    Serial.print("Back Intensity: "); Serial.println(val);
+  }
+
+  // LEFT (Positive X)
+  if (x > minThresh) {
+    int val = map(constrain(x, minThresh, maxThresh), minThresh, maxThresh, 1, 100);
+    Serial.print("Left Intensity: "); Serial.println(val);
+  }
+
+  // RIGHT (Negative X)
+  else if (x < -minThresh) {
+    int val = map(constrain(abs(x), minThresh, maxThresh), minThresh, maxThresh, 1, 100);
+    Serial.print("Right Intensity: "); Serial.println(val);
+  }
+
+  delay(100); 
+}
