@@ -1,0 +1,69 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_LSM303_U.h>
+#include <Arduino_LSM6DS3.h>
+
+/* Sensors */
+Adafruit_LSM303_Mag_Unified mag = Adafruit_LSM303_Mag_Unified(12345);
+
+/* Gyro Variables */
+float gx, gy, gz;
+int minThresh = 30;  
+int maxThresh = 500; 
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial);
+
+  // Initialize Magnetometer
+  if(!mag.begin()) {
+    Serial.println("LSM303 Not Found");
+    while(1);
+  }
+
+  // Initialize Gyroscope
+  if (!IMU.begin()) {
+    Serial.println("LSM6DS3 Not Found");
+    while(1);
+  }
+  
+  mag.enableAutoRange(true);
+}
+
+void loop() {
+  /* 1. POSITION/DIRECTION (Magnetometer) */
+  sensors_event_t event;
+  mag.getEvent(&event);
+
+  float heading = atan2(event.magnetic.y, event.magnetic.x) * 180 / M_PI;
+  if (heading < 0) heading += 360;
+
+  /* 2. MOVEMENT INTENSITY (Gyroscope) */
+  if (IMU.gyroscopeAvailable()) {
+    IMU.readGyroscope(gx, gy, gz);
+  }
+
+  // Determine Direction and Intensity for 2D Mapping
+  Serial.print("DIR: ");
+  if (heading >= 315 || heading < 45)  Serial.print("FRONT");
+  else if (heading >= 45 && heading < 135)  Serial.print("RIGHT");
+  else if (heading >= 135 && heading < 225) Serial.print("BACK");
+  else if (heading >= 225 && heading < 315) Serial.print("LEFT");
+
+  // Map Gyro Y to "Vertical" speed and Gyro X to "Horizontal" speed
+  int speedY = 0;
+  int speedX = 0;
+
+  if (abs(gy) > minThresh) {
+    speedY = map(constrain(abs(gy), minThresh, maxThresh), minThresh, maxThresh, 0, 100);
+  }
+  if (abs(gx) > minThresh) {
+    speedX = map(constrain(abs(gx), minThresh, maxThresh), minThresh, maxThresh, 0, 100);
+  }
+
+  Serial.print(" | Heading: "); Serial.print(heading);
+  Serial.print(" | Move_X: "); Serial.print(speedX);
+  Serial.print(" | Move_Y: "); Serial.println(speedY);
+
+  delay(50); // Faster sampling for smoother drawing
+}
