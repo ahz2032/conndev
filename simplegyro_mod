@@ -1,0 +1,75 @@
+/*
+  Arduino LSM6DS3 - Simple Gyroscope
+
+  This example reads the gyroscope values from the LSM6DS3
+  sensor and continuously prints them to the Serial Monitor
+  or Serial Plotter.
+
+  The circuit:
+  - Arduino Uno WiFi Rev 2 or Arduino Nano 33 IoT
+
+  created 10 Jul 2019
+  by Riccardo Rizzo
+
+  This example code is in the public domain.
+  ---------
+
+  MODIFIED, FOLLOWING THIS TUTORIAL: https://docs.arduino.cc/tutorials/nano-33-iot/imu-gyroscope/
+*/
+
+#include <Arduino_LSM6DS3.h>
+
+float x, y, z;
+//inizialitation of axis 
+int plusThreshold =30;
+int minusThreshold = -30;
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial);
+
+  if (!IMU.begin()) {
+    Serial.println("Failed to initialize IMU!");
+
+    while (1);
+  }
+
+  Serial.print("Gyroscope sample rate = ");
+  Serial.print(IMU.gyroscopeSampleRate());
+  Serial.println(" Hz");
+  Serial.println();
+  Serial.println("Gyroscope in degrees/second");
+}
+
+void loop() {
+
+  if (IMU.gyroscopeAvailable()) {
+    IMU.readGyroscope(x, y, z);
+  }
+
+  // Add 4 if statement to check if the sensors are available and read in the 3 axes
+  // If statements will check the x and y values of plus and minus threshold
+  // According to this values we can print the direction of the force
+
+    if(y > plusThreshold)
+  {
+  Serial.println("Collision front");
+  delay(500);
+  }
+  if(y < minusThreshold)
+  {
+  Serial.println("Collision back");
+  delay(500);
+  }
+  if(x < minusThreshold)
+  {
+  Serial.println("Collision right");
+  delay(500);
+  }
+  if(x > plusThreshold)
+  {
+  Serial.println("Collision left");
+  delay(500);
+  }
+
+}
