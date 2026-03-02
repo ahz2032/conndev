@@ -1,0 +1,247 @@
+#include <Arduino_LSM6DS3.h>
+#include <Adafruit_LSM303_U.h>
+#include <Adafruit_Sensor.h>
+#include <WiFiNINA.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <ArduinoMqttClient.h>
+#include <Wire.h>
+#include "arduino_secrets.h"
+
+// ================= BUTTONS & LEDS =================
+int calibrateButtonPin = 12;
+int resetButtonPin = 11;
+int calibrateLedPin = 6;
+int powerLedPin = 8;
+
+const unsigned long longPressTime = 1000;
+const unsigned long shortPressTime = 10; 
+
+unsigned long calPressStart = 0;
+bool calPressed = false;
+bool calibrateTriggered = false;
+
+unsigned long resetPressStart = 0;
+bool resetPressed = false;
+bool resetTriggered = false;
+
+bool systemPaused = false;
+
+// ================= STATE & CONTROL =================
+bool calibrationRunning = false;
+bool isCalibrated = false;
+bool ctrlPower = false;
+bool ctrlClick = false;
+bool ctrlClear = false;
+
+// ================= WIFI + MQTT =================
+WiFiClient wifi;
+MqttClient mqttClient(wifi);
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);
+
+char broker[] = "public.cloud.shiftr.io";
+int port = 1883;
+char topic[] = "kezia/imu/data";
+String clientID = "keziaIMU_";
+const String deviceName = "kezia";
+
+// ================= IMU & COORDINATES =================
+float ax, ay, az, gx, gy, gz;
+Adafruit_LSM303_Mag_Unified mag(12345);
+
+float currentYaw = 0;   
+float currentPitch = 0; 
+unsigned long lastMicros = 0;
+unsigned long lastSend = 0;
+const int sendInterval = 50; // Faster updates for smoother mouse (50ms)
+
+// SETTINGS: Adjust these for your screen
+const int SCREEN_WIDTH = 1920; 
+const int SCREEN_HEIGHT = 1080;
+const float YAW_SENSITIVITY = 5.0; // Increase this if left/right is too slow
+
+int mouseX = 0;
+int mouseY = 0;
+
+// ================= SETUP =================
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(calibrateButtonPin, INPUT_PULLUP);
+  pinMode(resetButtonPin, INPUT_PULLUP);
+  pinMode(calibrateLedPin, OUTPUT);
+  pinMode(powerLedPin, OUTPUT);
+
+  connectToNetwork();
+
+  if (!IMU.begin()) {
+    Serial.println("Failed to initialize IMU!");
+    while (1);
+  }
+  
+  mag.begin();
+  timeClient.begin();
+
+  byte mac[6];
+  WiFi.macAddress(mac);
+  for (int i = 0; i < 3; i++) clientID += String(mac[i], HEX);
+
+  mqttClient.setId(clientID);
+  mqttClient.setUsernamePassword(SECRET_MQTT_USER, SECRET_MQTT_PASS);
+}
+
+// ================= MAIN LOOP =================
+void loop() {
+  mqttClient.poll();
+  unsigned long now = millis();
+
+  if (!mqttClient.connected()) connectToBroker();
+
+  // ----- CALIBRATE BUTTON (Long Press) -----
+  if (digitalRead(calibrateButtonPin) == LOW) {
+    if (!calPressed) {
+      calPressStart = millis();
+      calPressed = true;
+      calibrateTriggered = false;
+    }
+    if (!calibrateTriggered && (millis() - calPressStart >= longPressTime)) {
+      Serial.println("CALIBRATION START");
+      systemPaused = false;
+      isCalibrated = false;
+      calibrationRunning = true;
+      calibrateTriggered = true;
+      digitalWrite(calibrateLedPin, HIGH);
+      digitalWrite(powerLedPin, LOW);
+      setPower(true);
+    }
+  } else {
+    calPressed = false;
+  }
+
+  // ----- RESET BUTTON (Long Press) ----- 
+  if (digitalRead(resetButtonPin) == LOW) {
+    if (!resetPressed) {
+      resetPressStart = millis();
+      resetPressed = true;
+      resetTriggered = false;
+    }
+    if (!resetTriggered && (millis() - resetPressStart >= longPressTime)) {
+      Serial.println("SYSTEM RESET & YAW CENTERED");
+      digitalWrite(calibrateLedPin, LOW);
+      digitalWrite(powerLedPin, LOW);
+      systemPaused = true; 
+      currentYaw = 0; // RE-CENTER MOUSE
+      setPower(false);
+      resetTriggered = true;
+    }
+  } else {
+    resetPressed = false;
+  }
+
+  if (systemPaused) return;
+
+  // ================= SENSOR & MQTT UPDATE =================
+  if (now - lastSend >= sendInterval) {
+    lastSend = now;
+
+    // Time delta for Gyro integration
+    unsigned long currentMicros = micros();
+    float dt = (currentMicros - lastMicros) / 1000000.0;
+    lastMicros = currentMicros;
+
+    if (IMU.accelerationAvailable()) IMU.readAcceleration(ax, ay, az);
+    if (IMU.gyroscopeAvailable()) IMU.readGyroscope(gx, gy, gz);
+
+    // 1. VERTICAL (Pitch) using Accelerometer
+    currentPitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+
+    // 2. HORIZONTAL (Yaw) using Gyroscope
+    // If movement is wrong, try changing 'gz' to 'gy'
+    if (abs(gz) > 0.1) { 
+      currentYaw += (gz * dt) * YAW_SENSITIVITY; 
+    }
+
+    // 3. CONSTRAIN & MAP
+    currentYaw = constrain(currentYaw, -40, 40);
+    currentPitch = constrain(currentPitch, -90, 90);
+
+    mouseX = map(currentYaw, -40, 40, 0, SCREEN_WIDTH);
+    mouseY = map(currentPitch, -90, 90, SCREEN_HEIGHT, 0);
+
+    // Handle Finish Calibration
+    if (calibrationRunning) {
+      calibrationRunning = false;
+      isCalibrated = true;
+      digitalWrite(calibrateLedPin, LOW);
+      digitalWrite(powerLedPin, HIGH);
+      Serial.println("CALIBRATION DONE");
+    }
+
+    if (isCalibrated) {
+      // Short Press - Click
+      if (millis() - calPressStart >= shortPressTime && millis() - calPressStart < shortPressTime + 150 && !calibrateTriggered) {
+        Serial.println("[CLICK]");
+        pulseClick();
+        calPressStart = 0; // Reset to prevent double triggers
+      }
+      // Short Press - Clear
+      if (millis() - resetPressStart >= shortPressTime && millis() - resetPressStart < shortPressTime + 150 && !resetTriggered) {
+        Serial.println("[CLEAR]");
+        pulseClear();
+        resetPressStart = 0; 
+      }
+
+      // PUBLISH DATA
+      if (mqttClient.connected()) {
+        mqttClient.beginMessage(topic);
+        mqttClient.print("{\"device\":\"" + deviceName + "\",");
+        mqttClient.print("\"coords\":{\"x\":" + String(mouseX) + ",\"y\":" + String(mouseY) + "},");
+        mqttClient.print("\"sensor\":{\"pitch\":" + String(currentPitch) + ",\"yaw\":" + String(currentYaw) + "},");
+        mqttClient.print("\"calibrated\":true}");
+        mqttClient.endMessage();
+      }
+    }
+  }
+}
+
+// ================= HELPER FUNCTIONS =================
+
+void connectToNetwork() {
+  Serial.print("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(SECRET_SSID, SECRET_PASS);
+    delay(2000);
+  }
+  Serial.println("Connected!");
+}
+
+boolean connectToBroker() {
+  return mqttClient.connect(broker, port);
+}
+
+void pulseClick() {
+  ctrlClick = true; publishControl();
+  delay(10);
+  ctrlClick = false; publishControl();
+}
+
+void pulseClear() {
+  ctrlClear = true; publishControl();
+  delay(10);
+  ctrlClear = false; publishControl();
+}
+
+void setPower(bool state) {
+  ctrlPower = state;
+  publishControl();
+}
+
+void publishControl() {
+  if (!mqttClient.connected()) return;
+  mqttClient.beginMessage("kezia/imu/control");
+  mqttClient.print("{\"power\":" + String(ctrlPower ? "true" : "false") + ",");
+  mqttClient.print("\"click\":" + String(ctrlClick ? "true" : "false") + ",");
+  mqttClient.print("\"clear\":" + String(ctrlClear ? "true" : "false") + "}");
+  mqttClient.endMessage();
+}
