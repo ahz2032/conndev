@@ -1,0 +1,110 @@
+//Test code to try GPS module with both usb through serial monitor and through http connection
+// Done with Claude.ai with documentation of the Adafruit GPS Library as a base.
+// chat link: https://claude.ai/share/fa561bc5-bac5-45ed-897e-d87cc13ff996
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Adafruit_GPS.h>
+
+// ── WiFi credentials ──────────────────────────────────────
+const char* ssid     = "Anto";
+const char* password = "Twiggy2008";
+
+// ── GPS Setup ─────────────────────────────────────────────
+#define GPSSerial Serial1
+Adafruit_GPS GPS(&GPSSerial);
+
+// ── Web Server on port 80 ─────────────────────────────────
+WebServer server(80);
+
+// ── HTML Page ─────────────────────────────────────────────
+void handleRoot() {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<title>GPS Data</title>";
+  html += "<meta http-equiv='refresh' content='5'>"; // auto refresh every 5s
+  html += "<style>";
+  html += "body { font-family: Arial; padding: 20px; background: #f0f0f0; }";
+  html += "h1 { color: #333; }";
+  html += ".card { background: white; padding: 20px; border-radius: 10px; max-width: 400px; }";
+  html += ".label { color: #888; font-size: 14px; }";
+  html += ".value { font-size: 24px; font-weight: bold; color: #222; }";
+  html += "</style></head><body>";
+  html += "<h1>🛰️ GPS Monitor</h1>";
+  html += "<div class='card'>";
+
+  if (GPS.fix) {
+    html += "<p><span class='label'>Latitude</span><br>";
+    html += "<span class='value'>" + String(GPS.latitudeDegrees, 6) + " " + GPS.lat + "</span></p>";
+
+    html += "<p><span class='label'>Longitude</span><br>";
+    html += "<span class='value'>" + String(GPS.longitudeDegrees, 6) + " " + GPS.lon + "</span></p>";
+
+    html += "<p><span class='label'>Altitude</span><br>";
+    html += "<span class='value'>" + String(GPS.altitude, 1) + " m</span></p>";
+
+    html += "<p><span class='label'>Speed</span><br>";
+    html += "<span class='value'>" + String(GPS.speed * 1.852, 1) + " km/h</span></p>";
+
+    html += "<p><span class='label'>Satellites</span><br>";
+    html += "<span class='value'>" + String((int)GPS.satellites) + "</span></p>";
+  } else {
+    html += "<p><span class='value'>⏳ Waiting for GPS fix...</span></p>";
+    html += "<p><span class='label'>Make sure you're near a window or outdoors</span></p>";
+  }
+
+  html += "</div></body></html>";
+  server.send(200, "text/html", html);
+}
+
+// ── Setup ──────────────────────────────────────────────────
+void setup() {
+  // Wired Serial Monitor
+  Serial.begin(115200);
+  while (!Serial) delay(10);
+  Serial.println("Booting...");
+
+  // GPS init
+  GPSSerial.begin(9600, SERIAL_8N1, D7, D6);
+  GPS.begin(9600);
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA); // RMC + GGA sentences only
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);    // 1Hz update rate
+  Serial.println("GPS initialized");
+
+  // WiFi connect
+  Serial.print("Connecting to hotspot");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected!");
+  Serial.print("Open this IP in your browser: http://");
+  Serial.println(WiFi.localIP());
+
+  // Start server
+  server.on("/", handleRoot);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+// ── Loop ───────────────────────────────────────────────────
+void loop() {
+  // Feed GPS data
+  char c = GPS.read();
+  if (GPS.newNMEAreceived()) {
+    GPS.parse(GPS.lastNMEA());
+  }
+
+  // Print to Serial Monitor
+  if (GPS.fix) {
+    Serial.print("Lat: "); Serial.print(GPS.latitudeDegrees, 6);
+    Serial.print(" | Lon: "); Serial.print(GPS.longitudeDegrees, 6);
+    Serial.print(" | Alt: "); Serial.print(GPS.altitude); Serial.print("m");
+    Serial.print(" | Speed: "); Serial.print(GPS.speed * 1.852); Serial.println("km/h");
+  } else {
+    Serial.println("No GPS fix yet...");
+  }
+
+  server.handleClient(); // handle HTTP requests
+  delay(1000);
+}
