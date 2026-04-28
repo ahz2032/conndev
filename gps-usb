@@ -1,0 +1,28 @@
+//code based on Adafruit GPS library examples:
+//https://github.com/adafruit/Adafruit_GPS/blob/master/examples/GPS_HardwareSerial_EchoTest/GPS_HardwareSerial_EchoTest.ino
+
+//changes applied to connect to XIAO-ESP32C6 down here
+
+#define GPSSerial Serial1
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) delay(10);
+  
+  // ESP32-C6 needs explicit pin assignment for Serial1 - RX=D7, TX=D6
+  GPSSerial.begin(9600, SERIAL_8N1, D7, D6);
+}
+
+void loop() {
+  // Computer → GPS
+  if (Serial.available()) {
+    char c = Serial.read();
+    GPSSerial.write(c);
+  }
+
+  // GPS → Computer
+  if (GPSSerial.available()) {
+    char c = GPSSerial.read();
+    Serial.write(c);
+  }
+}
